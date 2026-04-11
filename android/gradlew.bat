@@ -40,6 +40,14 @@ set APP_HOME=%DIRNAME%
 @rem Resolve any "." and ".." in APP_HOME to make it shorter.
 for %%i in ("%APP_HOME%") do set APP_HOME=%%~fi
 
+@rem --------------------------------------------------------------------------
+@rem Windows MAX_PATH (~260): React Native prefab + CMake/ninja use paths under
+@rem GRADLE_USER_HOME. Long defaults (or IDE/sandbox redirects) break the build.
+@rem Force a very short cache root (overrides a long GRADLE_USER_HOME from the environment).
+@rem To use another folder, change C:\rngradle below (keep the path short).
+@rem --------------------------------------------------------------------------
+set "GRADLE_USER_HOME=C:\rngradle"
+
 @rem Add default JVM options here. You can also use JAVA_OPTS and GRADLE_OPTS to pass JVM options to this script.
 set DEFAULT_JVM_OPTS="-Xmx64m" "-Xms64m"
 
