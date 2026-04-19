@@ -1,4 +1,7 @@
 {
   "name": "AndroidApp",
-  "displayName": "AndroidApp"
+  "displayName": "WhatsApp Status Saver - Video",
+  "react-native-google-mobile-ads": {
+    "android_app_id": "ca-app-pub-3860862913004469~6891292737"
+  }
 }

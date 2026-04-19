@@ -7,10 +7,7 @@
     <uses-permission
         android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
-    <!-- Required on Android 11+ to read WhatsApp's .Statuses folder via file paths (scoped storage). -->
-    <uses-permission
-        android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
-        tools:ignore="ScopedStorage" />
+
 
     <application
       android:name=".MainApplication"

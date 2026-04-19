@@ -35,6 +35,11 @@ local.properties
 !debug.keystore
 .kotlin/
 
+# Play upload signing (copy from android/keystore.properties.example)
+android/keystore.properties
+android/app/release.keystore
+android/app/*.jks
+
 # node.js
 #
 node_modules/
