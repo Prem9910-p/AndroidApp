@@ -118,8 +118,7 @@ android {
             signingConfig keystorePropertiesFile.exists() ? signingConfigs.release : signingConfigs.debug
             minifyEnabled enableProguardInReleaseBuilds
             proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
-            // Google test app ID — invalid placeholders can crash Mobile Ads at init. Set your real App ID for Play.
-            manifestPlaceholders.ADMOB_APP_ID = "ca-app-pub-3940256099942544~3347511713"
+            // Production App ID comes from defaultConfig (matches app.json). Debug uses Google test ID above.
         }
     }
 }

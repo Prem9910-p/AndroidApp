@@ -13,6 +13,7 @@ import {
   Dimensions,
   FlatList,
   Image,
+  Linking,
   Modal,
   NativeModules,
   PermissionsAndroid,
@@ -53,6 +54,25 @@ const APP_OPEN_RESUME_MIN_MS = 4 * 60 * 1000;
 const SCREEN_W = Dimensions.get('window').width;
 const GRID_GAP = 8;
 const CELL_SIZE = (SCREEN_W - GRID_GAP * 4) / 3;
+
+/** Parent folder — used in folder-bar hints (Unicode arrows). */
+const WHATSAPP_MEDIA_FOLDER =
+  'Internal Storage → Android → media → com.whatsapp → WhatsApp → Media';
+
+/** Same path as shown in file managers (ASCII arrows). */
+const WHATSAPP_MEDIA_PATH_DISPLAY =
+  'Internal Storage -> Android -> media -> com.whatsapp -> WhatsApp -> Media';
+
+/** Full path including the hidden status cache folder. */
+const WHATSAPP_STATUS_PATH = `${WHATSAPP_MEDIA_FOLDER} → .Statuses`;
+
+type AppTheme = {
+  bg: string;
+  surface: string;
+  text: string;
+  muted: string;
+  accent: string;
+};
 
 type TabId = 'images' | 'videos' | 'saved';
 
@@ -723,12 +743,22 @@ function AppContent() {
       <View style={[styles.center, styles.centerWide, { backgroundColor: theme.bg, paddingTop: insets.top }]}>
         <Text style={[styles.title, { color: theme.text }]}>Permission needed</Text>
         <Text style={[styles.hint, styles.permissionHint, { color: theme.muted }]}>
-          Allow Photos and Videos access so the app can list status media stored on your device.
+          Allow Photos and Videos access so the app can list status media stored on your device. On Android 14+, choose
+          &quot;Allow all&quot; if asked, not only selected photos—status files live outside your camera roll.
         </Text>
         <Pressable
           style={[styles.primaryBtn, styles.primaryBtnTop, { backgroundColor: theme.accent }]}
           onPress={() => bootstrap()}>
           <Text style={styles.primaryBtnText}>Grant permission</Text>
+        </Pressable>
+        <Pressable
+          style={[styles.smallBtnOutline, styles.permissionSettingsBtn, { borderColor: theme.muted }]}
+          onPress={() => {
+            Linking.openSettings().catch(() => {
+              /* ignore */
+            });
+          }}>
+          <Text style={[styles.smallBtnText, { color: theme.text }]}>Open app settings</Text>
         </Pressable>
       </View>
     );
@@ -767,7 +797,7 @@ function AppContent() {
             <Text style={[styles.folderBarHint, { color: theme.muted }]}>
               {customFolder.set
                 ? `Also scanning: ${customFolder.label ?? 'chosen folder'}`
-                : 'Tap Choose folder and select the hidden .Statuses folder inside WhatsApp → Media.'}
+                : `Open ${WHATSAPP_MEDIA_FOLDER}. If you don’t see .Statuses: ⋮ → Settings → Show hidden files → go back to Media. Then Choose folder.`}
             </Text>
           </View>
           <View style={styles.folderBarBtns}>
@@ -833,18 +863,15 @@ function AppContent() {
         columnWrapperStyle={styles.gridRow}
         ListEmptyComponent={
           <View style={styles.emptyWrap}>
-            <Text style={[styles.empty, { color: theme.muted }]}>
-              {tab === 'saved'
-                ? 'Nothing saved yet. Open Images or Videos and tap Save.'
-                : 'No files found. View statuses in your chat app first so they are cached on this device, then use "Choose folder" above and pick the .Statuses folder.'}
-            </Text>
+            {tab === 'saved' ? (
+              <Text style={[styles.empty, { color: theme.muted }]}>
+                Nothing saved yet. Open Images or Videos and tap Save.
+              </Text>
+            ) : (
+              <EmptyStatusInstructions theme={theme} />
+            )}
             {tab !== 'saved' && folderHint ? (
               <Text style={[styles.emptyHint, { color: theme.muted }]}>{folderHint}</Text>
-            ) : null}
-            {tab !== 'saved' && native.pickCustomStatusFolder ? (
-              <Text style={[styles.emptyHint, styles.marginTop10, { color: theme.muted }]}>
-                Or tap &quot;Choose folder&quot; above and open your WhatsApp .Statuses folder.
-              </Text>
             ) : null}
           </View>
         }
@@ -976,6 +1003,7 @@ const styles = StyleSheet.create({
   centerWide: { paddingHorizontal: 24 },
   permissionHint: { textAlign: 'center', marginTop: 8 },
   primaryBtnTop: { marginTop: 20 },
+  permissionSettingsBtn: { marginTop: 14, alignSelf: 'center', paddingHorizontal: 20, paddingVertical: 12 },
   autoRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 8 },
   autoLabel: { fontSize: 14 },
   tabs: { flexDirection: 'row', marginHorizontal: 12, borderRadius: 10, overflow: 'hidden', marginBottom: 8 },
@@ -1042,6 +1070,23 @@ const styles = StyleSheet.create({
   emptyWrap: { paddingHorizontal: 8 },
   empty: { textAlign: 'center', fontSize: 15, lineHeight: 22 },
   emptyHint: { textAlign: 'center', fontSize: 12, lineHeight: 18, marginTop: 12 },
+  emptyStepsOuter: { marginTop: 0, alignSelf: 'stretch' },
+  emptyStepsTitle: { fontSize: 16, fontWeight: '700', textAlign: 'center', marginBottom: 16, lineHeight: 22 },
+  emptyStepBlock: { marginBottom: 14 },
+  emptyStepHeading: { fontSize: 13, lineHeight: 20, textAlign: 'left' },
+  emptyStepNum: { fontWeight: '700' },
+  emptyBold: { fontWeight: '700' },
+  emptyTipLine: { fontSize: 11, lineHeight: 16, marginTop: 6, textAlign: 'left', fontStyle: 'italic' },
+  emptyPathBox: {
+    marginTop: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  emptyPathText: { fontSize: 12, lineHeight: 18 },
+  emptyBullet: { fontSize: 12, lineHeight: 18, marginTop: 6, paddingLeft: 8, textAlign: 'left' },
+  emptyStepFooter: { fontSize: 12, lineHeight: 18, marginTop: 12, textAlign: 'center' },
   videoPlaceholder: {
     backgroundColor: '#1a1a1a',
     justifyContent: 'center',
@@ -1074,5 +1119,81 @@ const styles = StyleSheet.create({
   primaryBtn: { paddingHorizontal: 24, paddingVertical: 14, borderRadius: 10 },
   primaryBtnText: { color: '#fff', fontWeight: '700', fontSize: 16 },
 });
+
+function EmptyStatusInstructions({ theme }: { theme: AppTheme }) {
+  const { emptyBold } = styles;
+  return (
+    <View style={styles.emptyStepsOuter}>
+      <Text style={[styles.emptyStepsTitle, { color: theme.text }]}>No files found? Follow these steps:</Text>
+
+      <View style={styles.emptyStepBlock}>
+        <Text style={[styles.emptyStepHeading, { color: theme.text }]}>
+          <Text style={styles.emptyStepNum}>1. </Text>
+          First, open <Text style={emptyBold}>WhatsApp</Text> and <Text style={emptyBold}>view some statuses</Text>
+        </Text>
+        <Text style={[styles.emptyTipLine, { color: theme.muted }]}>
+          👉 (This is required because statuses are cached only after viewing)
+        </Text>
+      </View>
+
+      <View style={styles.emptyStepBlock}>
+        <Text style={[styles.emptyStepHeading, { color: theme.text }]}>
+          <Text style={styles.emptyStepNum}>2. </Text>
+          Open your <Text style={emptyBold}>File Manager</Text>
+        </Text>
+      </View>
+
+      <View style={styles.emptyStepBlock}>
+        <Text style={[styles.emptyStepHeading, { color: theme.text }]}>
+          <Text style={styles.emptyStepNum}>3. </Text>
+          Go to:
+        </Text>
+        <View style={[styles.emptyPathBox, { backgroundColor: theme.surface, borderColor: theme.muted }]}>
+          <Text style={[styles.emptyPathText, { color: theme.text }]} selectable>
+            {WHATSAPP_MEDIA_PATH_DISPLAY}
+          </Text>
+        </View>
+      </View>
+
+      <View style={styles.emptyStepBlock}>
+        <Text style={[styles.emptyStepHeading, { color: theme.text }]}>
+          <Text style={styles.emptyStepNum}>4. </Text>
+          If you don’t see the <Text style={emptyBold}>.Statuses</Text> folder:
+        </Text>
+        <Text style={[styles.emptyBullet, { color: theme.text }]}>
+          • Tap <Text style={emptyBold}>⋮ (three dots)</Text> in the top corner
+        </Text>
+        <Text style={[styles.emptyBullet, { color: theme.text }]}>
+          • Open <Text style={emptyBold}>Settings</Text> or <Text style={emptyBold}>View options</Text>
+        </Text>
+        <Text style={[styles.emptyBullet, { color: theme.text }]}>
+          • Enable <Text style={emptyBold}>&quot;Show hidden files&quot;</Text>
+        </Text>
+      </View>
+
+      <View style={styles.emptyStepBlock}>
+        <Text style={[styles.emptyStepHeading, { color: theme.text }]}>
+          <Text style={styles.emptyStepNum}>5. </Text>
+          Go back to the <Text style={emptyBold}>Media</Text> folder
+        </Text>
+        <Text style={[styles.emptyTipLine, { color: theme.muted }]}>
+          👉 Now you will see the <Text style={[emptyBold, { color: theme.text }]}>.Statuses</Text> folder
+        </Text>
+      </View>
+
+      <View style={styles.emptyStepBlock}>
+        <Text style={[styles.emptyStepHeading, { color: theme.text }]}>
+          <Text style={styles.emptyStepNum}>6. </Text>
+          Open it to view status images/videos in your file manager
+        </Text>
+      </View>
+
+      <Text style={[styles.emptyStepFooter, { color: theme.muted }]}>
+        Then return here: tap <Text style={[emptyBold, { color: theme.text }]}>Choose folder</Text> and select{' '}
+        <Text style={[emptyBold, { color: theme.text }]}>.Statuses</Text>, or pull down to refresh.
+      </Text>
+    </View>
+  );
+}
 
 export default App;
