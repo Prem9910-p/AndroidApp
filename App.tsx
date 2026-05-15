@@ -721,7 +721,7 @@ function AppContent() {
   if (Platform.OS !== 'android' || !native) {
     return (
       <View style={[styles.center, { backgroundColor: theme.bg, paddingTop: insets.top }]}>
-        <Text style={[styles.title, { color: theme.text }]}>WhatsApp Status Saver - Video</Text>
+        <Text style={[styles.title, { color: theme.text }]}> Status Saver - Video</Text>
         <Text style={[styles.hint, { color: theme.muted }]}>
           This app reads status media from your device on Android only.
         </Text>
@@ -767,7 +767,7 @@ function AppContent() {
   return (
     <View style={[styles.root, { backgroundColor: theme.bg, paddingTop: insets.top }]}>
       <View style={styles.header}>
-        <Text style={[styles.title, { color: theme.text }]}>WhatsApp Status Saver - Video</Text>
+        <Text style={[styles.title, { color: theme.text }]}> Status Saver - Video</Text>
         <View style={styles.autoRow}>
           <Text style={[styles.autoLabel, { color: theme.muted }]}>Auto-save new</Text>
           <Switch value={autoSave} onValueChange={persistAutoSave} trackColor={{ false: '#444', true: theme.accent }} />
