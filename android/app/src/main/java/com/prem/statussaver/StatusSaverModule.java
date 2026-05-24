@@ -65,46 +65,46 @@ public class StatusSaverModule extends ReactContextBaseJavaModule {
 
   private static int requestCodeForSlot(String slot) {
     return SLOT_BUSINESS.equals(normalizeSlot(slot))
-        ? REQ_PICK_TREE_BUSINESS
-        : REQ_PICK_TREE_WHATSAPP;
+            ? REQ_PICK_TREE_BUSINESS
+            : REQ_PICK_TREE_WHATSAPP;
   }
 
   private final ActivityEventListener mActivityListener =
-      new BaseActivityEventListener() {
-        @Override
-        public void onActivityResult(
-            Activity activity, int requestCode, int resultCode, Intent data) {
-          if (!isPickTreeRequest(requestCode)) {
-            return;
-          }
-          Promise p = mPickFolderPromise;
-          mPickFolderPromise = null;
-          if (p == null) {
-            return;
-          }
-          if (resultCode != Activity.RESULT_OK || data == null || data.getData() == null) {
-            p.reject("E_CANCELLED", "Folder selection cancelled");
-            return;
-          }
-          Uri treeUri = data.getData();
-          String slot = slotForRequestCode(requestCode);
-          if (!uriMatchesSlot(treeUri, slot)) {
-            p.reject("E_WRONG_FOLDER", wrongFolderMessage(slot));
-            return;
-          }
-          try {
-            int takeFlags =
-                data.getFlags()
-                    & (Intent.FLAG_GRANT_READ_URI_PERMISSION
-                        | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
-            activity.getContentResolver().takePersistableUriPermission(treeUri, takeFlags);
-          } catch (SecurityException ignored) {
-            // Some devices still allow reading without persistable permission.
-          }
-          prefs().edit().putString(prefKeyForSlot(slot), treeUri.toString()).apply();
-          p.resolve(treeUri.toString());
-        }
-      };
+          new BaseActivityEventListener() {
+            @Override
+            public void onActivityResult(
+                    Activity activity, int requestCode, int resultCode, Intent data) {
+              if (!isPickTreeRequest(requestCode)) {
+                return;
+              }
+              Promise p = mPickFolderPromise;
+              mPickFolderPromise = null;
+              if (p == null) {
+                return;
+              }
+              if (resultCode != Activity.RESULT_OK || data == null || data.getData() == null) {
+                p.reject("E_CANCELLED", "Folder selection cancelled");
+                return;
+              }
+              Uri treeUri = data.getData();
+              String slot = slotForRequestCode(requestCode);
+              if (!uriMatchesSlot(treeUri, slot)) {
+                p.reject("E_WRONG_FOLDER", wrongFolderMessage(slot));
+                return;
+              }
+              try {
+                int takeFlags =
+                        data.getFlags()
+                                & (Intent.FLAG_GRANT_READ_URI_PERMISSION
+                                | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+                activity.getContentResolver().takePersistableUriPermission(treeUri, takeFlags);
+              } catch (SecurityException ignored) {
+                // Some devices still allow reading without persistable permission.
+              }
+              prefs().edit().putString(prefKeyForSlot(slot), treeUri.toString()).apply();
+              p.resolve(treeUri.toString());
+            }
+          };
 
   public StatusSaverModule(ReactApplicationContext reactContext) {
     super(reactContext);
@@ -152,7 +152,7 @@ public class StatusSaverModule extends ReactContextBaseJavaModule {
     }
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
       StorageManager sm =
-          (StorageManager) getReactApplicationContext().getSystemService(Context.STORAGE_SERVICE);
+              (StorageManager) getReactApplicationContext().getSystemService(Context.STORAGE_SERVICE);
       if (sm != null) {
         for (StorageVolume vol : sm.getStorageVolumes()) {
           File dir = vol.getDirectory();
@@ -215,13 +215,13 @@ public class StatusSaverModule extends ReactContextBaseJavaModule {
   private static boolean isMediaExtension(String ext) {
     ext = ext.toLowerCase(Locale.US);
     return ext.equals("jpg")
-        || ext.equals("jpeg")
-        || ext.equals("png")
-        || ext.equals("webp")
-        || ext.equals("mp4")
-        || ext.equals("mkv")
-        || ext.equals("3gp")
-        || ext.equals("webm");
+            || ext.equals("jpeg")
+            || ext.equals("png")
+            || ext.equals("webp")
+            || ext.equals("mp4")
+            || ext.equals("mkv")
+            || ext.equals("3gp")
+            || ext.equals("webm");
   }
 
   private static boolean isMediaFile(File file) {
@@ -264,15 +264,15 @@ public class StatusSaverModule extends ReactContextBaseJavaModule {
 
   private String prefKeyForSlot(String slot) {
     return SLOT_BUSINESS.equals(normalizeSlot(slot))
-        ? PREF_CUSTOM_TREE_BUSINESS
-        : PREF_CUSTOM_TREE_WHATSAPP;
+            ? PREF_CUSTOM_TREE_BUSINESS
+            : PREF_CUSTOM_TREE_WHATSAPP;
   }
 
   private static boolean uriLooksLikeBusinessFolder(Uri treeUri) {
     String u = treeUri.toString().toLowerCase(Locale.US);
     return u.contains("com.whatsapp.w4b")
-        || u.contains("whatsapp%20business")
-        || u.contains("whatsapp+business");
+            || u.contains("whatsapp%20business")
+            || u.contains("whatsapp+business");
   }
 
   private static boolean uriMatchesSlot(Uri treeUri, String slot) {
@@ -286,10 +286,10 @@ public class StatusSaverModule extends ReactContextBaseJavaModule {
   private static String wrongFolderMessage(String slot) {
     if (SLOT_BUSINESS.equals(normalizeSlot(slot))) {
       return "Wrong folder. Open WhatsApp Business .Statuses:\n"
-          + "Android/media/com.whatsapp.w4b/WhatsApp Business/Media/.Statuses";
+              + "Android/media/com.whatsapp.w4b/WhatsApp Business/Media/.Statuses";
     }
     return "Wrong folder. Open WhatsApp .Statuses (not Business):\n"
-        + "Android/media/com.whatsapp/WhatsApp/Media/.Statuses";
+            + "Android/media/com.whatsapp/WhatsApp/Media/.Statuses";
   }
 
   private Uri initialUriForSlot(String slot) {
@@ -298,11 +298,11 @@ public class StatusSaverModule extends ReactContextBaseJavaModule {
     }
     try {
       String docId =
-          SLOT_BUSINESS.equals(normalizeSlot(slot))
-              ? "primary:Android/media/com.whatsapp.w4b/WhatsApp Business/Media/.Statuses"
-              : "primary:Android/media/com.whatsapp/WhatsApp/Media/.Statuses";
+              SLOT_BUSINESS.equals(normalizeSlot(slot))
+                      ? "primary:Android/media/com.whatsapp.w4b/WhatsApp Business/Media/.Statuses"
+                      : "primary:Android/media/com.whatsapp/WhatsApp/Media/.Statuses";
       return DocumentsContract.buildDocumentUri(
-          "com.android.externalstorage.documents", docId);
+              "com.android.externalstorage.documents", docId);
     } catch (Exception ignored) {
       return null;
     }
@@ -427,8 +427,8 @@ public class StatusSaverModule extends ReactContextBaseJavaModule {
   private String displayNameFromContentUri(Uri uri) {
     ReactApplicationContext ctx = getReactApplicationContext();
     try (Cursor c =
-        ctx.getContentResolver()
-            .query(uri, new String[] {OpenableColumns.DISPLAY_NAME}, null, null, null)) {
+                 ctx.getContentResolver()
+                         .query(uri, new String[] {OpenableColumns.DISPLAY_NAME}, null, null, null)) {
       if (c != null && c.moveToFirst()) {
         int idx = c.getColumnIndex(OpenableColumns.DISPLAY_NAME);
         if (idx >= 0) {
@@ -533,9 +533,9 @@ public class StatusSaverModule extends ReactContextBaseJavaModule {
     mPickFolderPromise = promise;
     Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
     intent.addFlags(
-        Intent.FLAG_GRANT_READ_URI_PERMISSION
-            | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-            | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+            Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                    | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
       intent.addFlags(Intent.FLAG_GRANT_PREFIX_URI_PERMISSION);
     }
@@ -570,11 +570,11 @@ public class StatusSaverModule extends ReactContextBaseJavaModule {
       if (uriStr != null) {
         try {
           getReactApplicationContext()
-              .getContentResolver()
-              .releasePersistableUriPermission(
-                  Uri.parse(uriStr),
-                  Intent.FLAG_GRANT_READ_URI_PERMISSION
-                      | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+                  .getContentResolver()
+                  .releasePersistableUriPermission(
+                          Uri.parse(uriStr),
+                          Intent.FLAG_GRANT_READ_URI_PERMISSION
+                                  | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
         } catch (SecurityException ignored) {
         }
       }
@@ -698,22 +698,22 @@ public class StatusSaverModule extends ReactContextBaseJavaModule {
       values.put(MediaStore.MediaColumns.MIME_TYPE, mime);
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
         String rel =
-            mime.startsWith("video")
-                ? Environment.DIRECTORY_MOVIES + "/StatusSaver"
-                : Environment.DIRECTORY_PICTURES + "/StatusSaver";
+                mime.startsWith("video")
+                        ? Environment.DIRECTORY_MOVIES + "/StatusSaver"
+                        : Environment.DIRECTORY_PICTURES + "/StatusSaver";
         values.put(MediaStore.MediaColumns.RELATIVE_PATH, rel);
       }
       Uri collection =
-          mime.startsWith("video")
-              ? MediaStore.Video.Media.EXTERNAL_CONTENT_URI
-              : MediaStore.Images.Media.EXTERNAL_CONTENT_URI;
+              mime.startsWith("video")
+                      ? MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+                      : MediaStore.Images.Media.EXTERNAL_CONTENT_URI;
       Uri destUri = ctx.getContentResolver().insert(collection, values);
       if (destUri == null) {
         promise.reject("E_MEDIA_STORE", "Could not create media entry");
         return;
       }
       try (OutputStream out = ctx.getContentResolver().openOutputStream(destUri);
-          InputStream input = ctx.getContentResolver().openInputStream(sourceUri)) {
+           InputStream input = ctx.getContentResolver().openInputStream(sourceUri)) {
         if (out == null || input == null) {
           promise.reject("E_IO", "Could not open streams");
           return;
@@ -752,22 +752,22 @@ public class StatusSaverModule extends ReactContextBaseJavaModule {
       values.put(MediaStore.MediaColumns.MIME_TYPE, mime);
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
         String rel =
-            mime.startsWith("video")
-                ? Environment.DIRECTORY_MOVIES + "/StatusSaver"
-                : Environment.DIRECTORY_PICTURES + "/StatusSaver";
+                mime.startsWith("video")
+                        ? Environment.DIRECTORY_MOVIES + "/StatusSaver"
+                        : Environment.DIRECTORY_PICTURES + "/StatusSaver";
         values.put(MediaStore.MediaColumns.RELATIVE_PATH, rel);
       }
       Uri collection =
-          mime.startsWith("video")
-              ? MediaStore.Video.Media.EXTERNAL_CONTENT_URI
-              : MediaStore.Images.Media.EXTERNAL_CONTENT_URI;
+              mime.startsWith("video")
+                      ? MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+                      : MediaStore.Images.Media.EXTERNAL_CONTENT_URI;
       Uri uri = ctx.getContentResolver().insert(collection, values);
       if (uri == null) {
         promise.reject("E_MEDIA_STORE", "Could not create media entry");
         return;
       }
       try (OutputStream out = ctx.getContentResolver().openOutputStream(uri);
-          FileInputStream input = new FileInputStream(file)) {
+           FileInputStream input = new FileInputStream(file)) {
         if (out == null) {
           promise.reject("E_IO", "Could not open output stream");
           return;
@@ -789,7 +789,7 @@ public class StatusSaverModule extends ReactContextBaseJavaModule {
       String destName = System.currentTimeMillis() + "_" + baseName;
       File dest = new File(savedDir(), destName);
       try (InputStream input = ctx.getContentResolver().openInputStream(sourceUri);
-          FileOutputStream output = new FileOutputStream(dest)) {
+           FileOutputStream output = new FileOutputStream(dest)) {
         if (input == null) {
           promise.reject("E_IO", "Could not read source");
           return;
@@ -821,7 +821,7 @@ public class StatusSaverModule extends ReactContextBaseJavaModule {
       String destName = System.currentTimeMillis() + "_" + src.getName();
       File dest = new File(savedDir(), destName);
       try (FileInputStream input = new FileInputStream(src);
-          FileOutputStream output = new FileOutputStream(dest)) {
+           FileOutputStream output = new FileOutputStream(dest)) {
         copyStream(input, output);
       }
       promise.resolve(fileToMap(dest));
@@ -969,8 +969,8 @@ public class StatusSaverModule extends ReactContextBaseJavaModule {
         return;
       }
       Uri uri =
-          FileProvider.getUriForFile(
-              ctx, ctx.getPackageName() + ".fileprovider", file);
+              FileProvider.getUriForFile(
+                      ctx, ctx.getPackageName() + ".fileprovider", file);
       String mime = mimeForFile(file);
       Intent intent = new Intent(Intent.ACTION_SEND);
       intent.setType(mime);
@@ -1002,10 +1002,10 @@ public class StatusSaverModule extends ReactContextBaseJavaModule {
         return;
       }
       MediaScannerConnection.scanFile(
-          getReactApplicationContext(),
-          new String[] {file.getAbsolutePath()},
-          new String[] {mimeForFile(file)},
-          null);
+              getReactApplicationContext(),
+              new String[] {file.getAbsolutePath()},
+              new String[] {mimeForFile(file)},
+              null);
       promise.resolve(true);
     } catch (Exception e) {
       promise.reject("E_SCAN", e.getMessage(), e);

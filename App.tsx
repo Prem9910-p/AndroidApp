@@ -47,7 +47,64 @@ import {
 } from './adsConfig';
 
 const AUTO_SAVE_KEY = '@status_saver_auto';
-const SEEN_KEY = '@status_saver_seen';
+/** Tracks statuses already saved (gallery + app Saved) — used for auto and manual saves. */
+const SAVED_REGISTRY_KEY = '@status_saver_seen';
+
+function statusSaveKey(f: Pick<StatusFile, 'path' | 'modified'>): string {
+  return `${f.path}|${f.modified}`;
+}
+
+async function loadSaveRegistry(): Promise<Set<string>> {
+  try {
+    const raw = await AsyncStorage.getItem(SAVED_REGISTRY_KEY);
+    return new Set(raw ? JSON.parse(raw) : []);
+  } catch {
+    return new Set();
+  }
+}
+
+async function persistSaveRegistry(registry: Set<string>): Promise<void> {
+  try {
+    await AsyncStorage.setItem(SAVED_REGISTRY_KEY, JSON.stringify([...registry]));
+  } catch {
+    /* ignore */
+  }
+}
+
+type SaveStatusResult = 'saved' | 'duplicate' | 'failed';
+
+async function saveStatusIfNew(
+  native: StatusSaverNative,
+  f: StatusFile,
+  registry: Set<string>,
+  options?: { scanMedia?: boolean },
+): Promise<SaveStatusResult> {
+  const key = statusSaveKey(f);
+  if (registry.has(key)) {
+    return 'duplicate';
+  }
+  try {
+    await native.saveToGallery(f.path);
+    await native.copyToAppSaved(f.path);
+    if (options?.scanMedia) {
+      await native.scanMedia(f.path);
+    }
+    registry.add(key);
+    return 'saved';
+  } catch {
+    return 'failed';
+  }
+}
+
+/** AsyncStorage is the source of truth — avoids stale React state saving to gallery. */
+async function readAutoSaveEnabled(): Promise<boolean> {
+  try {
+    const v = await AsyncStorage.getItem(AUTO_SAVE_KEY);
+    return v === '1';
+  } catch {
+    return false;
+  }
+}
 const INTERSTITIAL_EVERY_N_SAVES = 2;
 const APP_OPEN_RESUME_MIN_MS = 4 * 60 * 1000;
 
@@ -55,24 +112,7 @@ const SCREEN_W = Dimensions.get('window').width;
 const GRID_GAP = 8;
 const CELL_SIZE = (SCREEN_W - GRID_GAP * 4) / 3;
 
-/** Parent folder — used in folder-bar hints (Unicode arrows). */
-const WHATSAPP_MEDIA_FOLDER =
-  'Internal Storage → Android → media → com.whatsapp → WhatsApp → Media';
-
-/** Same path as shown in file managers (ASCII arrows). */
-const WHATSAPP_MEDIA_PATH_DISPLAY =
-  'Internal Storage -> Android -> media -> com.whatsapp -> WhatsApp -> Media';
-
-/** Full path including the hidden status cache folder. */
-const WHATSAPP_STATUS_PATH = `${WHATSAPP_MEDIA_FOLDER} → .Statuses`;
-
-type AppTheme = {
-  bg: string;
-  surface: string;
-  text: string;
-  muted: string;
-  accent: string;
-};
+type FolderSlot = 'whatsapp' | 'business';
 
 type TabId = 'images' | 'videos' | 'saved';
 
@@ -89,12 +129,21 @@ type FolderScanRow = { path: string; exists: boolean; mediaCount: number };
 
 type CustomFolderInfo = { set: boolean; uri: string | null; label: string | null };
 
+type CustomFoldersState = { whatsapp: CustomFolderInfo; business: CustomFolderInfo };
+
+const EMPTY_CUSTOM_FOLDER: CustomFolderInfo = { set: false, uri: null, label: null };
+
 type StatusSaverNative = {
   getStatusFiles: () => Promise<StatusFile[]>;
   getFolderScanReport?: () => Promise<FolderScanRow[]>;
   getCustomStatusFolder?: () => Promise<CustomFolderInfo>;
-  pickCustomStatusFolder?: () => Promise<string>;
-  clearCustomStatusFolder?: () => Promise<boolean>;
+  getCustomStatusFolders?: () => Promise<CustomFoldersState>;
+  pickWhatsAppStatusFolder?: () => Promise<string>;
+  pickBusinessStatusFolder?: () => Promise<string>;
+  pickCustomStatusFolder?: (slot: FolderSlot) => Promise<string>;
+  clearWhatsAppStatusFolder?: () => Promise<boolean>;
+  clearBusinessStatusFolder?: () => Promise<boolean>;
+  clearCustomStatusFolder?: (slot: FolderSlot) => Promise<boolean>;
   hasFullStorageAccess?: () => Promise<boolean>;
   openManageAllFilesSettings?: () => Promise<void>;
   saveToGallery: (path: string) => Promise<{ uri: string }>;
@@ -168,10 +217,9 @@ function AppContent() {
   const [selectionMode, setSelectionMode] = useState(false);
   const [preview, setPreview] = useState<StatusFile | null>(null);
   const [folderHint, setFolderHint] = useState<string | null>(null);
-  const [customFolder, setCustomFolder] = useState<CustomFolderInfo>({
-    set: false,
-    uri: null,
-    label: null,
+  const [customFolders, setCustomFolders] = useState<CustomFoldersState>({
+    whatsapp: EMPTY_CUSTOM_FOLDER,
+    business: EMPTY_CUSTOM_FOLDER,
   });
   const [interstitialLoaded, setInterstitialLoaded] = useState(false);
   const [appOpenLoaded, setAppOpenLoaded] = useState(false);
@@ -213,59 +261,54 @@ function AppContent() {
     setSavedItems(list);
   }, [native]);
 
-  const refreshCustomFolder = useCallback(async () => {
-    if (!native?.getCustomStatusFolder) {
+  const refreshCustomFolders = useCallback(async () => {
+    if (!native?.getCustomStatusFolders) {
+      if (native?.getCustomStatusFolder) {
+        try {
+          const r = await native.getCustomStatusFolder();
+          setCustomFolders({ whatsapp: r, business: EMPTY_CUSTOM_FOLDER });
+        } catch {
+          setCustomFolders({ whatsapp: EMPTY_CUSTOM_FOLDER, business: EMPTY_CUSTOM_FOLDER });
+        }
+      }
       return;
     }
     try {
-      const r = await native.getCustomStatusFolder();
-      setCustomFolder({ set: r.set, uri: r.uri, label: r.label });
+      const r = await native.getCustomStatusFolders();
+      setCustomFolders({
+        whatsapp: r.whatsapp ?? EMPTY_CUSTOM_FOLDER,
+        business: r.business ?? EMPTY_CUSTOM_FOLDER,
+      });
     } catch {
-      setCustomFolder({ set: false, uri: null, label: null });
+      setCustomFolders({ whatsapp: EMPTY_CUSTOM_FOLDER, business: EMPTY_CUSTOM_FOLDER });
     }
   }, [native]);
 
   const runAutoSave = useCallback(
-    async (list: StatusFile[], enabledOverride?: boolean) => {
-      const should = enabledOverride ?? autoSave;
-      if (!native || !should) return;
-      let raw: string | null = null;
-      try {
-        raw = await AsyncStorage.getItem(SEEN_KEY);
-      } catch {
-        /* ignore */
-      }
-      const seen = new Set<string>(raw ? JSON.parse(raw) : []);
-      const next = new Set(seen);
+    async (list: StatusFile[], forceRun = false) => {
+      if (!native || !list.length) return;
+      const enabled = forceRun || (await readAutoSaveEnabled());
+      if (!enabled) return;
+      const registry = await loadSaveRegistry();
       let changed = false;
       for (const f of list) {
-        const key = `${f.path}|${f.modified}`;
-        if (next.has(key)) continue;
-        next.add(key);
-        changed = true;
-        try {
-          await native.saveToGallery(f.path);
-          await native.copyToAppSaved(f.path);
-        } catch {
-          /* ignore per-file errors */
+        const result = await saveStatusIfNew(native, f, registry);
+        if (result === 'saved') {
+          changed = true;
         }
       }
       if (changed) {
-        try {
-          await AsyncStorage.setItem(SEEN_KEY, JSON.stringify([...next]));
-        } catch {
-          /* ignore */
-        }
+        await persistSaveRegistry(registry);
         await loadSaved();
       }
     },
-    [autoSave, native, loadSaved],
+    [native, loadSaved],
   );
 
   const persistAutoSave = useCallback(
     async (v: boolean) => {
-      setAutoSave(v);
       await AsyncStorage.setItem(AUTO_SAVE_KEY, v ? '1' : '0');
+      setAutoSave(v);
       if (v && native && permissionOk) {
         const list = await loadStatuses();
         await loadSaved();
@@ -288,17 +331,17 @@ function AppContent() {
       if (!ok) {
         return;
       }
-      const autoOn = await loadPrefs();
+      await loadPrefs();
       const list = await loadStatuses();
       await loadSaved();
-      if (list) await runAutoSave(list, autoOn);
-      await refreshCustomFolder();
+      if (list) await runAutoSave(list);
+      await refreshCustomFolders();
     } catch {
       /* Native module errors should not leave the UI stuck on Loading */
     } finally {
       setLoading(false);
     }
-  }, [native, loadPrefs, loadStatuses, loadSaved, runAutoSave, refreshCustomFolder]);
+  }, [native, loadPrefs, loadStatuses, loadSaved, runAutoSave, refreshCustomFolders]);
 
   useEffect(() => {
     bootstrap();
@@ -457,11 +500,6 @@ function AppContent() {
     });
   }, [hdUnlocked, rewardedLoaded]);
 
-  const autoSaveRef = useRef(autoSave);
-  useEffect(() => {
-    autoSaveRef.current = autoSave;
-  }, [autoSave]);
-
   const appStateRef = useRef<AppStateStatus>(AppState.currentState);
   useEffect(() => {
     if (!native || !permissionOk) {
@@ -476,9 +514,7 @@ function AppContent() {
       const handleAppActive = async () => {
         const list = await loadStatuses();
         await loadSaved();
-        if (list && autoSaveRef.current) {
-          await runAutoSave(list, true);
-        }
+        if (list) await runAutoSave(list);
       };
       handleAppActive().catch(() => {
         /* ignore resume refresh errors */
@@ -527,44 +563,70 @@ function AppContent() {
       const list = await loadStatuses();
       await loadSaved();
       if (list) await runAutoSave(list);
-      await refreshCustomFolder();
+      await refreshCustomFolders();
     } finally {
       setRefreshing(false);
     }
-  }, [native, permissionOk, loadStatuses, loadSaved, runAutoSave, refreshCustomFolder]);
+  }, [native, permissionOk, loadStatuses, loadSaved, runAutoSave, refreshCustomFolders]);
 
-  const pickCustomFolder = useCallback(async () => {
-    if (!native?.pickCustomStatusFolder) {
-      return;
-    }
-    try {
-      await native.pickCustomStatusFolder();
-      const list = await loadStatuses();
-      await loadSaved();
-      if (list && autoSaveRef.current) {
-        await runAutoSave(list, true);
+  const pickCustomFolder = useCallback(
+    async (slot: FolderSlot) => {
+      if (!native) {
+        return;
       }
-      await refreshCustomFolder();
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      if (!/E_CANCELLED|cancelled/i.test(msg)) {
-        Alert.alert('Folder', msg);
+      try {
+        if (slot === 'business' && native.pickBusinessStatusFolder) {
+          await native.pickBusinessStatusFolder();
+        } else if (slot === 'whatsapp' && native.pickWhatsAppStatusFolder) {
+          await native.pickWhatsAppStatusFolder();
+        } else if (native.pickCustomStatusFolder) {
+          await native.pickCustomStatusFolder(slot);
+        } else {
+          return;
+        }
+        const list = await loadStatuses();
+        await loadSaved();
+        if (list) await runAutoSave(list);
+        await refreshCustomFolders();
+      } catch (e: unknown) {
+        const msg =
+          e instanceof Error
+            ? e.message
+            : e && typeof e === 'object' && 'message' in e
+              ? String((e as { message: unknown }).message)
+              : String(e);
+        if (/E_CANCELLED|cancelled/i.test(msg)) {
+          return;
+        }
+        Alert.alert(/E_WRONG_FOLDER/i.test(msg) ? 'Wrong folder' : 'Folder', msg);
       }
-    }
-  }, [native, loadStatuses, loadSaved, runAutoSave, refreshCustomFolder]);
+    },
+    [native, loadStatuses, loadSaved, runAutoSave, refreshCustomFolders],
+  );
 
-  const clearCustomFolder = useCallback(async () => {
-    if (!native?.clearCustomStatusFolder) {
-      return;
-    }
-    try {
-      await native.clearCustomStatusFolder();
-      await loadStatuses();
-      await refreshCustomFolder();
-    } catch (e) {
-      Alert.alert('Error', String(e));
-    }
-  }, [native, loadStatuses, refreshCustomFolder]);
+  const clearCustomFolder = useCallback(
+    async (slot: FolderSlot) => {
+      if (!native) {
+        return;
+      }
+      try {
+        if (slot === 'business' && native.clearBusinessStatusFolder) {
+          await native.clearBusinessStatusFolder();
+        } else if (slot === 'whatsapp' && native.clearWhatsAppStatusFolder) {
+          await native.clearWhatsAppStatusFolder();
+        } else if (native.clearCustomStatusFolder) {
+          await native.clearCustomStatusFolder(slot);
+        } else {
+          return;
+        }
+        await loadStatuses();
+        await refreshCustomFolders();
+      } catch (e) {
+        Alert.alert('Error', String(e));
+      }
+    },
+    [native, loadStatuses, refreshCustomFolders],
+  );
 
   const filtered = useMemo(() => {
     if (tab === 'saved') return savedItems;
@@ -586,18 +648,44 @@ function AppContent() {
     setSelectionMode(false);
   }, []);
 
+  const allVisibleSelected =
+    filtered.length > 0 && filtered.every(f => selection.has(f.path));
+
+  const toggleSelectAllVisible = useCallback(() => {
+    if (filtered.length === 0) {
+      return;
+    }
+    setSelectionMode(true);
+    setSelection(prev => {
+      const allSelected = filtered.every(f => prev.has(f.path));
+      if (allSelected) {
+        return new Set();
+      }
+      return new Set(filtered.map(f => f.path));
+    });
+  }, [filtered]);
+
   const downloadOne = useCallback(
     async (f: StatusFile, hdMode = false) => {
       if (!native) return;
       try {
-        // Source files already carry original quality from WhatsApp cache.
-        // "HD unlock" gates access, then uses the same underlying save operation.
-        await native.saveToGallery(f.path);
-        await native.copyToAppSaved(f.path);
-        await native.scanMedia(f.path);
+        const registry = await loadSaveRegistry();
+        const result = await saveStatusIfNew(native, f, registry, { scanMedia: true });
+        if (result === 'duplicate') {
+          Alert.alert('Already saved', 'This status is already in your gallery.');
+          return;
+        }
+        if (result === 'failed') {
+          Alert.alert('Error', 'Could not save this status.');
+          return;
+        }
+        await persistSaveRegistry(registry);
         await loadSaved();
         maybeShowInterstitial();
-        Alert.alert('Saved', hdMode ? 'HD download saved to gallery.' : 'Saved to gallery (Pictures or Movies / StatusSaver).');
+        Alert.alert(
+          'Saved',
+          hdMode ? 'HD download saved to gallery.' : 'Saved to gallery (Pictures or Movies / StatusSaver).',
+        );
       } catch (e) {
         Alert.alert('Error', String(e));
       }
@@ -618,20 +706,40 @@ function AppContent() {
 
   const downloadSelected = useCallback(async () => {
     if (!native || selection.size === 0) return;
-    const n = selection.size;
     try {
+      const registry = await loadSaveRegistry();
+      let saved = 0;
+      let skipped = 0;
+      let failed = 0;
       for (const path of selection) {
         const f = items.find(i => i.path === path) ?? savedItems.find(i => i.path === path);
-        if (f) {
-          await native.saveToGallery(f.path);
-          await native.copyToAppSaved(f.path);
-          await native.scanMedia(f.path);
+        if (!f) continue;
+        const result = await saveStatusIfNew(native, f, registry, { scanMedia: true });
+        if (result === 'saved') {
+          saved += 1;
+          maybeShowInterstitial();
+        } else if (result === 'duplicate') {
+          skipped += 1;
+        } else {
+          failed += 1;
         }
+      }
+      if (saved > 0) {
+        await persistSaveRegistry(registry);
       }
       await loadSaved();
       clearSelection();
-      maybeShowInterstitial();
-      Alert.alert('Saved', `${n} item(s) saved.`);
+      if (saved === 0 && skipped > 0 && failed === 0) {
+        Alert.alert('Already saved', 'All selected items were saved before.');
+      } else if (failed > 0 && saved === 0) {
+        Alert.alert('Error', 'Could not save the selected items.');
+      } else {
+        const parts: string[] = [];
+        if (saved > 0) parts.push(`${saved} saved`);
+        if (skipped > 0) parts.push(`${skipped} already saved`);
+        if (failed > 0) parts.push(`${failed} failed`);
+        Alert.alert('Done', parts.join(', ') + '.');
+      }
     } catch (e) {
       Alert.alert('Error', String(e));
     }
@@ -790,61 +898,104 @@ function AppContent() {
         ))}
       </View>
 
-      {native.pickCustomStatusFolder ? (
+      {native.pickWhatsAppStatusFolder || native.pickCustomStatusFolder ? (
         <View style={[styles.folderBar, { backgroundColor: theme.surface }]}>
           <View style={styles.folderBarTextCol}>
             <Text style={[styles.folderBarTitle, { color: theme.text }]}>Not seeing files?</Text>
             <Text style={[styles.folderBarHint, { color: theme.muted }]}>
-              {customFolder.set
-                ? `Also scanning: ${customFolder.label ?? 'chosen folder'}`
-                : `Open ${WHATSAPP_MEDIA_FOLDER}. If you don’t see .Statuses: ⋮ → Settings → Show hidden files → go back to Media. Then Choose folder.`}
+              Pick one or both .Statuses folders. If both are chosen, statuses from WhatsApp and
+              WhatsApp Business are merged in the list.
             </Text>
+            {customFolders.whatsapp.set || customFolders.business.set ? (
+              <Text style={[styles.folderBarActive, { color: theme.text }]}>
+                {[
+                  customFolders.whatsapp.set ? 'WA folder selected' : null,
+                  customFolders.business.set ? 'BWA folder selected' : null,
+                ]
+                  .filter(Boolean)
+                  .join(' · ')}
+              </Text>
+            ) : null}
           </View>
+
           <View style={styles.folderBarBtns}>
             <Pressable
               style={[styles.folderPickBtn, { backgroundColor: theme.accent }]}
               onPress={() => {
-                pickCustomFolder().catch(() => {
+                pickCustomFolder('whatsapp').catch(() => {
                   /* handled in callback */
                 });
               }}>
-              <Text style={styles.smallBtnText}>Choose folder</Text>
+              <Text style={styles.smallBtnText}>Choose folder WA</Text>
             </Pressable>
-            {customFolder.set ? (
+            {customFolders.whatsapp.set ? (
               <Pressable
                 style={styles.smallBtnOutline}
                 onPress={() => {
-                  clearCustomFolder().catch(() => {
+                  clearCustomFolder('whatsapp').catch(() => {
                     /* handled in callback */
                   });
                 }}>
-                <Text style={[styles.smallBtnText, { color: theme.text }]}>Clear</Text>
+                <Text style={[styles.smallBtnText, { color: theme.text }]}>Clear WA</Text>
+              </Pressable>
+            ) : null}
+            <Pressable
+              style={[styles.folderPickBtn, styles.folderPickBtnBusiness]}
+              onPress={() => {
+                pickCustomFolder('business').catch(() => {
+                  /* handled in callback */
+                });
+              }}>
+              <Text style={styles.smallBtnText}>Choose folder BWA</Text>
+            </Pressable>
+            {customFolders.business.set ? (
+              <Pressable
+                style={styles.smallBtnOutline}
+                onPress={() => {
+                  clearCustomFolder('business').catch(() => {
+                    /* handled in callback */
+                  });
+                }}>
+                <Text style={[styles.smallBtnText, { color: theme.text }]}>Clear BWA</Text>
               </Pressable>
             ) : null}
           </View>
         </View>
       ) : null}
 
-      {selectionMode && selection.size > 0 && (
+      {selectionMode && (
         <View style={[styles.bar, { backgroundColor: theme.surface }]}>
-          <Text style={{ color: theme.text }}>{selection.size} selected</Text>
+          <Text style={[styles.barCount, { color: theme.text }]}>{selection.size} selected</Text>
           <View style={styles.barActions}>
-            {tab !== 'saved' && (
-              <Pressable onPress={downloadSelected} style={[styles.smallBtn, { backgroundColor: theme.accent }]}>
-                <Text style={styles.smallBtnText}>Save</Text>
+            {filtered.length > 0 ? (
+              <Pressable
+                onPress={toggleSelectAllVisible}
+                style={[styles.barBtn, styles.smallBtnOutline, styles.selectAllBtn]}>
+                <Text style={[styles.barBtnText, { color: theme.text }]}>
+                  {allVisibleSelected ? 'Deselect all' : 'Select all'}
+                </Text>
               </Pressable>
-            )}
-            {tab === 'saved' ? (
-              <Pressable onPress={removeSelectedSaved} style={[styles.smallBtn, styles.smallBtnDanger]}>
-                <Text style={styles.smallBtnText}>Remove</Text>
+            ) : null}
+            {tab !== 'saved' && selection.size > 0 ? (
+              <Pressable
+                onPress={downloadSelected}
+                style={[styles.barBtn, styles.smallBtn, { backgroundColor: theme.accent }]}>
+                <Text style={styles.barBtnText}>Save</Text>
               </Pressable>
-            ) : (
-              <Pressable onPress={deleteSelectedStatuses} style={[styles.smallBtn, styles.smallBtnDanger]}>
-                <Text style={styles.smallBtnText}>Delete</Text>
-              </Pressable>
-            )}
-            <Pressable onPress={clearSelection} style={styles.smallBtnOutline}>
-              <Text style={[styles.smallBtnText, { color: theme.text }]}>Cancel</Text>
+            ) : null}
+            {selection.size > 0 ? (
+              tab === 'saved' ? (
+                <Pressable onPress={removeSelectedSaved} style={[styles.barBtn, styles.smallBtn, styles.smallBtnDanger]}>
+                  <Text style={styles.barBtnText}>Remove</Text>
+                </Pressable>
+              ) : (
+                <Pressable onPress={deleteSelectedStatuses} style={[styles.barBtn, styles.smallBtn, styles.smallBtnDanger]}>
+                  <Text style={styles.barBtnText}>Delete</Text>
+                </Pressable>
+              )
+            ) : null}
+            <Pressable onPress={clearSelection} style={[styles.barBtn, styles.smallBtnOutline]}>
+              <Text style={[styles.barBtnText, { color: theme.text }]}>Cancel</Text>
             </Pressable>
           </View>
         </View>
@@ -868,7 +1019,9 @@ function AppContent() {
                 Nothing saved yet. Open Images or Videos and tap Save.
               </Text>
             ) : (
-              <EmptyStatusInstructions theme={theme} />
+              <Text style={[styles.empty, { color: theme.muted }]}>
+                No statuses found. Pull down to refresh, or use Choose folder WA / BWA above.
+              </Text>
             )}
             {tab !== 'saved' && folderHint ? (
               <Text style={[styles.emptyHint, { color: theme.muted }]}>{folderHint}</Text>
@@ -1021,19 +1174,36 @@ const styles = StyleSheet.create({
   folderBarTextCol: { flex: 1 },
   folderBarTitle: { fontSize: 14, fontWeight: '700', marginBottom: 4 },
   folderBarHint: { fontSize: 12, lineHeight: 17 },
-  folderBarBtns: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, alignItems: 'center' },
+  folderBarActive: { fontSize: 12, lineHeight: 17, marginTop: 8, fontWeight: '600' },
+  folderBarBtns: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginTop: 10 },
   folderPickBtn: { paddingHorizontal: 14, paddingVertical: 10, borderRadius: 8 },
+  folderPickBtnBusiness: { backgroundColor: '#1565c0' },
   bar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
+    flexDirection: 'column',
+    alignItems: 'stretch',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
     marginHorizontal: 12,
     borderRadius: 8,
     marginBottom: 8,
+    gap: 10,
   },
-  barActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, justifyContent: 'flex-end' },
+  barCount: { fontSize: 15, fontWeight: '700' },
+  barActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    alignItems: 'center',
+  },
+  barBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    minWidth: 72,
+    alignItems: 'center',
+  },
+  barBtnText: { color: '#fff', fontWeight: '600', fontSize: 13 },
+  selectAllBtn: { borderColor: '#888' },
   smallBtn: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 8 },
   smallBtnDanger: { backgroundColor: '#c62828' },
   smallBtnOutline: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 8, borderWidth: 1, borderColor: '#888' },
@@ -1070,23 +1240,6 @@ const styles = StyleSheet.create({
   emptyWrap: { paddingHorizontal: 8 },
   empty: { textAlign: 'center', fontSize: 15, lineHeight: 22 },
   emptyHint: { textAlign: 'center', fontSize: 12, lineHeight: 18, marginTop: 12 },
-  emptyStepsOuter: { marginTop: 0, alignSelf: 'stretch' },
-  emptyStepsTitle: { fontSize: 16, fontWeight: '700', textAlign: 'center', marginBottom: 16, lineHeight: 22 },
-  emptyStepBlock: { marginBottom: 14 },
-  emptyStepHeading: { fontSize: 13, lineHeight: 20, textAlign: 'left' },
-  emptyStepNum: { fontWeight: '700' },
-  emptyBold: { fontWeight: '700' },
-  emptyTipLine: { fontSize: 11, lineHeight: 16, marginTop: 6, textAlign: 'left', fontStyle: 'italic' },
-  emptyPathBox: {
-    marginTop: 8,
-    paddingVertical: 12,
-    paddingHorizontal: 12,
-    borderRadius: 10,
-    borderWidth: StyleSheet.hairlineWidth,
-  },
-  emptyPathText: { fontSize: 12, lineHeight: 18 },
-  emptyBullet: { fontSize: 12, lineHeight: 18, marginTop: 6, paddingLeft: 8, textAlign: 'left' },
-  emptyStepFooter: { fontSize: 12, lineHeight: 18, marginTop: 12, textAlign: 'center' },
   videoPlaceholder: {
     backgroundColor: '#1a1a1a',
     justifyContent: 'center',
@@ -1119,81 +1272,5 @@ const styles = StyleSheet.create({
   primaryBtn: { paddingHorizontal: 24, paddingVertical: 14, borderRadius: 10 },
   primaryBtnText: { color: '#fff', fontWeight: '700', fontSize: 16 },
 });
-
-function EmptyStatusInstructions({ theme }: { theme: AppTheme }) {
-  const { emptyBold } = styles;
-  return (
-    <View style={styles.emptyStepsOuter}>
-      <Text style={[styles.emptyStepsTitle, { color: theme.text }]}>No files found? Follow these steps:</Text>
-
-      <View style={styles.emptyStepBlock}>
-        <Text style={[styles.emptyStepHeading, { color: theme.text }]}>
-          <Text style={styles.emptyStepNum}>1. </Text>
-          First, open <Text style={emptyBold}>WhatsApp</Text> and <Text style={emptyBold}>view some statuses</Text>
-        </Text>
-        <Text style={[styles.emptyTipLine, { color: theme.muted }]}>
-          👉 (This is required because statuses are cached only after viewing)
-        </Text>
-      </View>
-
-      <View style={styles.emptyStepBlock}>
-        <Text style={[styles.emptyStepHeading, { color: theme.text }]}>
-          <Text style={styles.emptyStepNum}>2. </Text>
-          Open your <Text style={emptyBold}>File Manager</Text>
-        </Text>
-      </View>
-
-      <View style={styles.emptyStepBlock}>
-        <Text style={[styles.emptyStepHeading, { color: theme.text }]}>
-          <Text style={styles.emptyStepNum}>3. </Text>
-          Go to:
-        </Text>
-        <View style={[styles.emptyPathBox, { backgroundColor: theme.surface, borderColor: theme.muted }]}>
-          <Text style={[styles.emptyPathText, { color: theme.text }]} selectable>
-            {WHATSAPP_MEDIA_PATH_DISPLAY}
-          </Text>
-        </View>
-      </View>
-
-      <View style={styles.emptyStepBlock}>
-        <Text style={[styles.emptyStepHeading, { color: theme.text }]}>
-          <Text style={styles.emptyStepNum}>4. </Text>
-          If you don’t see the <Text style={emptyBold}>.Statuses</Text> folder:
-        </Text>
-        <Text style={[styles.emptyBullet, { color: theme.text }]}>
-          • Tap <Text style={emptyBold}>⋮ (three dots)</Text> in the top corner
-        </Text>
-        <Text style={[styles.emptyBullet, { color: theme.text }]}>
-          • Open <Text style={emptyBold}>Settings</Text> or <Text style={emptyBold}>View options</Text>
-        </Text>
-        <Text style={[styles.emptyBullet, { color: theme.text }]}>
-          • Enable <Text style={emptyBold}>&quot;Show hidden files&quot;</Text>
-        </Text>
-      </View>
-
-      <View style={styles.emptyStepBlock}>
-        <Text style={[styles.emptyStepHeading, { color: theme.text }]}>
-          <Text style={styles.emptyStepNum}>5. </Text>
-          Go back to the <Text style={emptyBold}>Media</Text> folder
-        </Text>
-        <Text style={[styles.emptyTipLine, { color: theme.muted }]}>
-          👉 Now you will see the <Text style={[emptyBold, { color: theme.text }]}>.Statuses</Text> folder
-        </Text>
-      </View>
-
-      <View style={styles.emptyStepBlock}>
-        <Text style={[styles.emptyStepHeading, { color: theme.text }]}>
-          <Text style={styles.emptyStepNum}>6. </Text>
-          Open it to view status images/videos in your file manager
-        </Text>
-      </View>
-
-      <Text style={[styles.emptyStepFooter, { color: theme.muted }]}>
-        Then return here: tap <Text style={[emptyBold, { color: theme.text }]}>Choose folder</Text> and select{' '}
-        <Text style={[emptyBold, { color: theme.text }]}>.Statuses</Text>, or pull down to refresh.
-      </Text>
-    </View>
-  );
-}
 
 export default App;
