@@ -12,6 +12,7 @@ import android.os.Build;
 import android.os.Environment;
 import android.os.storage.StorageManager;
 import android.os.storage.StorageVolume;
+import android.provider.DocumentsContract;
 import android.provider.MediaStore;
 import android.provider.OpenableColumns;
 import android.provider.Settings;
@@ -43,17 +44,37 @@ import java.util.Set;
 public class StatusSaverModule extends ReactContextBaseJavaModule {
 
   private static final String PREFS = "status_saver";
+  /** Legacy single-folder key (migrated to {@link #PREF_CUSTOM_TREE_WHATSAPP}). */
   private static final String PREF_CUSTOM_TREE = "custom_status_tree_uri";
-  private static final int REQ_PICK_TREE = 7142;
+  private static final String PREF_CUSTOM_TREE_WHATSAPP = "custom_status_tree_uri_whatsapp";
+  private static final String PREF_CUSTOM_TREE_BUSINESS = "custom_status_tree_uri_business";
+  private static final String SLOT_WHATSAPP = "whatsapp";
+  private static final String SLOT_BUSINESS = "business";
+  private static final int REQ_PICK_TREE_WHATSAPP = 7142;
+  private static final int REQ_PICK_TREE_BUSINESS = 7143;
 
   private Promise mPickFolderPromise;
+
+  private static boolean isPickTreeRequest(int requestCode) {
+    return requestCode == REQ_PICK_TREE_WHATSAPP || requestCode == REQ_PICK_TREE_BUSINESS;
+  }
+
+  private static String slotForRequestCode(int requestCode) {
+    return requestCode == REQ_PICK_TREE_BUSINESS ? SLOT_BUSINESS : SLOT_WHATSAPP;
+  }
+
+  private static int requestCodeForSlot(String slot) {
+    return SLOT_BUSINESS.equals(normalizeSlot(slot))
+        ? REQ_PICK_TREE_BUSINESS
+        : REQ_PICK_TREE_WHATSAPP;
+  }
 
   private final ActivityEventListener mActivityListener =
       new BaseActivityEventListener() {
         @Override
         public void onActivityResult(
             Activity activity, int requestCode, int resultCode, Intent data) {
-          if (requestCode != REQ_PICK_TREE) {
+          if (!isPickTreeRequest(requestCode)) {
             return;
           }
           Promise p = mPickFolderPromise;
@@ -66,6 +87,11 @@ public class StatusSaverModule extends ReactContextBaseJavaModule {
             return;
           }
           Uri treeUri = data.getData();
+          String slot = slotForRequestCode(requestCode);
+          if (!uriMatchesSlot(treeUri, slot)) {
+            p.reject("E_WRONG_FOLDER", wrongFolderMessage(slot));
+            return;
+          }
           try {
             int takeFlags =
                 data.getFlags()
@@ -75,7 +101,7 @@ public class StatusSaverModule extends ReactContextBaseJavaModule {
           } catch (SecurityException ignored) {
             // Some devices still allow reading without persistable permission.
           }
-          prefs().edit().putString(PREF_CUSTOM_TREE, treeUri.toString()).apply();
+          prefs().edit().putString(prefKeyForSlot(slot), treeUri.toString()).apply();
           p.resolve(treeUri.toString());
         }
       };
@@ -144,6 +170,7 @@ public class StatusSaverModule extends ReactContextBaseJavaModule {
     List<File> list = new ArrayList<>();
     list.add(new File(root, "Android/media/com.whatsapp/WhatsApp/Media/.Statuses"));
     list.add(new File(root, "WhatsApp/Media/.Statuses"));
+    list.add(new File(root, "Android/media/com.whatsapp.w4b/WhatsApp Business/Media/.Statuses"));
     list.add(new File(root, "Android/media/com.whatsapp.w4b/WhatsApp/Media/.Statuses"));
     list.add(new File(root, "WhatsApp Business/Media/.Statuses"));
     list.add(new File(root, "Android/media/com.gbwhatsapp/GBWhatsApp/Media/.Statuses"));
@@ -231,8 +258,75 @@ public class StatusSaverModule extends ReactContextBaseJavaModule {
     return mimeForExtension(fileExtension(file));
   }
 
-  private DocumentFile customTreeRoot() {
-    String uriStr = prefs().getString(PREF_CUSTOM_TREE, null);
+  private static String normalizeSlot(String slot) {
+    return SLOT_BUSINESS.equals(slot) ? SLOT_BUSINESS : SLOT_WHATSAPP;
+  }
+
+  private String prefKeyForSlot(String slot) {
+    return SLOT_BUSINESS.equals(normalizeSlot(slot))
+        ? PREF_CUSTOM_TREE_BUSINESS
+        : PREF_CUSTOM_TREE_WHATSAPP;
+  }
+
+  private static boolean uriLooksLikeBusinessFolder(Uri treeUri) {
+    String u = treeUri.toString().toLowerCase(Locale.US);
+    return u.contains("com.whatsapp.w4b")
+        || u.contains("whatsapp%20business")
+        || u.contains("whatsapp+business");
+  }
+
+  private static boolean uriMatchesSlot(Uri treeUri, String slot) {
+    boolean businessPath = uriLooksLikeBusinessFolder(treeUri);
+    if (SLOT_BUSINESS.equals(normalizeSlot(slot))) {
+      return businessPath;
+    }
+    return !businessPath;
+  }
+
+  private static String wrongFolderMessage(String slot) {
+    if (SLOT_BUSINESS.equals(normalizeSlot(slot))) {
+      return "Wrong folder. Open WhatsApp Business .Statuses:\n"
+          + "Android/media/com.whatsapp.w4b/WhatsApp Business/Media/.Statuses";
+    }
+    return "Wrong folder. Open WhatsApp .Statuses (not Business):\n"
+        + "Android/media/com.whatsapp/WhatsApp/Media/.Statuses";
+  }
+
+  private Uri initialUriForSlot(String slot) {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+      return null;
+    }
+    try {
+      String docId =
+          SLOT_BUSINESS.equals(normalizeSlot(slot))
+              ? "primary:Android/media/com.whatsapp.w4b/WhatsApp Business/Media/.Statuses"
+              : "primary:Android/media/com.whatsapp/WhatsApp/Media/.Statuses";
+      return DocumentsContract.buildDocumentUri(
+          "com.android.externalstorage.documents", docId);
+    } catch (Exception ignored) {
+      return null;
+    }
+  }
+
+  /** Migrate legacy single custom folder to the WhatsApp slot once. */
+  private void migrateLegacyCustomTreeIfNeeded() {
+    SharedPreferences p = prefs();
+    if (p.contains(PREF_CUSTOM_TREE_WHATSAPP)) {
+      return;
+    }
+    String legacy = p.getString(PREF_CUSTOM_TREE, null);
+    if (legacy != null) {
+      p.edit().putString(PREF_CUSTOM_TREE_WHATSAPP, legacy).remove(PREF_CUSTOM_TREE).apply();
+    }
+  }
+
+  private String customTreeUriForSlot(String slot) {
+    migrateLegacyCustomTreeIfNeeded();
+    return prefs().getString(prefKeyForSlot(slot), null);
+  }
+
+  private DocumentFile customTreeRootForSlot(String slot) {
+    String uriStr = customTreeUriForSlot(slot);
     if (uriStr == null) {
       return null;
     }
@@ -240,8 +334,8 @@ public class StatusSaverModule extends ReactContextBaseJavaModule {
     return DocumentFile.fromTreeUri(getReactApplicationContext(), treeUri);
   }
 
-  private int countCustomTreeMedia() {
-    DocumentFile root = customTreeRoot();
+  private int countCustomTreeMediaForSlot(String slot) {
+    DocumentFile root = customTreeRootForSlot(slot);
     if (root == null || !root.exists()) {
       return 0;
     }
@@ -258,8 +352,8 @@ public class StatusSaverModule extends ReactContextBaseJavaModule {
     return n;
   }
 
-  private void appendCustomTreeFiles(WritableArray items, Set<String> seen) {
-    DocumentFile root = customTreeRoot();
+  private void appendCustomTreeFilesForSlot(String slot, WritableArray items, Set<String> seen) {
+    DocumentFile root = customTreeRootForSlot(slot);
     if (root == null || !root.exists()) {
       return;
     }
@@ -282,6 +376,38 @@ public class StatusSaverModule extends ReactContextBaseJavaModule {
       }
       items.pushMap(documentToMap(f, docUri, name));
     }
+  }
+
+  private void appendAllCustomTreeFiles(WritableArray items, Set<String> seen) {
+    appendCustomTreeFilesForSlot(SLOT_WHATSAPP, items, seen);
+    appendCustomTreeFilesForSlot(SLOT_BUSINESS, items, seen);
+  }
+
+  private WritableMap customFolderInfoForSlot(String slot) {
+    WritableMap map = Arguments.createMap();
+    String uriStr = customTreeUriForSlot(slot);
+    if (uriStr == null) {
+      map.putBoolean("set", false);
+      map.putNull("uri");
+      map.putNull("label");
+      return map;
+    }
+    DocumentFile root = customTreeRootForSlot(slot);
+    String label = uriStr;
+    if (root != null && root.exists()) {
+      String n = root.getName();
+      if (n != null) {
+        label = n;
+      }
+    }
+    map.putBoolean("set", true);
+    map.putString("uri", uriStr);
+    if (label != null) {
+      map.putString("label", label);
+    } else {
+      map.putNull("label");
+    }
+    return map;
   }
 
   private WritableMap documentToMap(DocumentFile f, Uri docUri, String name) {
@@ -361,38 +487,40 @@ public class StatusSaverModule extends ReactContextBaseJavaModule {
   @ReactMethod
   public void getCustomStatusFolder(Promise promise) {
     try {
-      WritableMap map = Arguments.createMap();
-      String uriStr = prefs().getString(PREF_CUSTOM_TREE, null);
-      if (uriStr == null) {
-        map.putBoolean("set", false);
-        map.putNull("uri");
-        map.putNull("label");
-        promise.resolve(map);
-        return;
-      }
-      DocumentFile root = customTreeRoot();
-      String label = uriStr;
-      if (root != null && root.exists()) {
-        String n = root.getName();
-        if (n != null) {
-          label = n;
-        }
-      }
-      map.putBoolean("set", true);
-      map.putString("uri", uriStr);
-      if (label != null) {
-        map.putString("label", label);
-      } else {
-        map.putNull("label");
-      }
-      promise.resolve(map);
+      promise.resolve(customFolderInfoForSlot(SLOT_WHATSAPP));
     } catch (Exception e) {
       promise.reject("E_CUSTOM_FOLDER", e.getMessage(), e);
     }
   }
 
   @ReactMethod
-  public void pickCustomStatusFolder(Promise promise) {
+  public void getCustomStatusFolders(Promise promise) {
+    try {
+      WritableMap map = Arguments.createMap();
+      map.putMap(SLOT_WHATSAPP, customFolderInfoForSlot(SLOT_WHATSAPP));
+      map.putMap(SLOT_BUSINESS, customFolderInfoForSlot(SLOT_BUSINESS));
+      promise.resolve(map);
+    } catch (Exception e) {
+      promise.reject("E_CUSTOM_FOLDERS", e.getMessage(), e);
+    }
+  }
+
+  @ReactMethod
+  public void pickWhatsAppStatusFolder(Promise promise) {
+    startPickCustomFolder(SLOT_WHATSAPP, promise);
+  }
+
+  @ReactMethod
+  public void pickBusinessStatusFolder(Promise promise) {
+    startPickCustomFolder(SLOT_BUSINESS, promise);
+  }
+
+  @ReactMethod
+  public void pickCustomStatusFolder(String slot, Promise promise) {
+    startPickCustomFolder(slot, promise);
+  }
+
+  private void startPickCustomFolder(String slot, Promise promise) {
     Activity activity = getReactApplicationContext().getCurrentActivity();
     if (activity == null) {
       promise.reject("E_NO_ACTIVITY", "No activity");
@@ -411,8 +539,12 @@ public class StatusSaverModule extends ReactContextBaseJavaModule {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
       intent.addFlags(Intent.FLAG_GRANT_PREFIX_URI_PERMISSION);
     }
+    Uri initial = initialUriForSlot(slot);
+    if (initial != null) {
+      intent.putExtra(DocumentsContract.EXTRA_INITIAL_URI, initial);
+    }
     try {
-      activity.startActivityForResult(intent, REQ_PICK_TREE);
+      activity.startActivityForResult(intent, requestCodeForSlot(slot));
     } catch (Exception e) {
       mPickFolderPromise = null;
       promise.reject("E_PICKER", e.getMessage(), e);
@@ -420,9 +552,21 @@ public class StatusSaverModule extends ReactContextBaseJavaModule {
   }
 
   @ReactMethod
-  public void clearCustomStatusFolder(Promise promise) {
+  public void clearWhatsAppStatusFolder(Promise promise) {
+    clearCustomStatusFolder(SLOT_WHATSAPP, promise);
+  }
+
+  @ReactMethod
+  public void clearBusinessStatusFolder(Promise promise) {
+    clearCustomStatusFolder(SLOT_BUSINESS, promise);
+  }
+
+  @ReactMethod
+  public void clearCustomStatusFolder(String slot, Promise promise) {
     try {
-      String uriStr = prefs().getString(PREF_CUSTOM_TREE, null);
+      migrateLegacyCustomTreeIfNeeded();
+      String key = prefKeyForSlot(slot);
+      String uriStr = prefs().getString(key, null);
       if (uriStr != null) {
         try {
           getReactApplicationContext()
@@ -434,7 +578,7 @@ public class StatusSaverModule extends ReactContextBaseJavaModule {
         } catch (SecurityException ignored) {
         }
       }
-      prefs().edit().remove(PREF_CUSTOM_TREE).apply();
+      prefs().edit().remove(key).apply();
       promise.resolve(true);
     } catch (Exception e) {
       promise.reject("E_CLEAR", e.getMessage(), e);
@@ -470,7 +614,7 @@ public class StatusSaverModule extends ReactContextBaseJavaModule {
           items.pushMap(fileToMap(file));
         }
       }
-      appendCustomTreeFiles(items, seen);
+      appendAllCustomTreeFiles(items, seen);
       promise.resolve(items);
     } catch (Exception e) {
       promise.reject("E_STATUS_LIST", e.getMessage(), e);
@@ -499,13 +643,20 @@ public class StatusSaverModule extends ReactContextBaseJavaModule {
         row.putInt("mediaCount", count);
         arr.pushMap(row);
       }
-      WritableMap customRow = Arguments.createMap();
-      customRow.putString("path", "Custom folder (you picked)");
-      DocumentFile cr = customTreeRoot();
-      boolean customOk = cr != null && cr.exists();
-      customRow.putBoolean("exists", customOk);
-      customRow.putInt("mediaCount", customOk ? countCustomTreeMedia() : 0);
-      arr.pushMap(customRow);
+      WritableMap waRow = Arguments.createMap();
+      waRow.putString("path", "Custom folder — WhatsApp (you picked)");
+      DocumentFile waRoot = customTreeRootForSlot(SLOT_WHATSAPP);
+      boolean waOk = waRoot != null && waRoot.exists();
+      waRow.putBoolean("exists", waOk);
+      waRow.putInt("mediaCount", waOk ? countCustomTreeMediaForSlot(SLOT_WHATSAPP) : 0);
+      arr.pushMap(waRow);
+      WritableMap bizRow = Arguments.createMap();
+      bizRow.putString("path", "Custom folder — WhatsApp Business (you picked)");
+      DocumentFile bizRoot = customTreeRootForSlot(SLOT_BUSINESS);
+      boolean bizOk = bizRoot != null && bizRoot.exists();
+      bizRow.putBoolean("exists", bizOk);
+      bizRow.putInt("mediaCount", bizOk ? countCustomTreeMediaForSlot(SLOT_BUSINESS) : 0);
+      arr.pushMap(bizRow);
       promise.resolve(arr);
     } catch (Exception e) {
       promise.reject("E_SCAN_REPORT", e.getMessage(), e);
